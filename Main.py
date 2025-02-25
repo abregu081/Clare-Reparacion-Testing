@@ -4,21 +4,128 @@ from tkinter.scrolledtext import ScrolledText
 from datetime import datetime
 import csv
 import os
-from tkinter import filedialog
+from tkinter import filedialog, messagebox
 from PIL import Image, ImageTk
 from Process import Autotest_path, Segurity_path, ManualInspection_path
-from Autotest import buscar_archivo_autotest, procesar_archivo_autotest, buscar_archivo_segurity, procesar_archivo_segurity, buscar_archivo_manual, procesar_archivo_manual
+from Autotest import (
+    buscar_archivo_autotest,
+    procesar_archivo_autotest,
+    buscar_archivo_segurity,
+    procesar_archivo_segurity,
+    buscar_archivo_manual,
+    procesar_archivo_manual
+)
 
+# ------------------------------------------------------------------------------
+# FUNCIONES PARA HISTORIAL
+# ------------------------------------------------------------------------------
+def extraer_fecha_y_hora(folder_name, file_name):
+    """
+    Extrae la fecha y la hora usando:
+    - El nombre de la carpeta (folder_name) => '230123' => 2023-01-23
+    - El nombre del archivo (file_name) => '20230123103000_codigo.csv'
+    
+    Luego, intenta formatear fecha/hora a un formato más legible (YYYY-MM-DD y HH:MM:SS).
+    Si no puede parsear, usa 'Unknown'.
+    """
+    date_str = "Unknown"
+    time_str = "Unknown"
+    
+    # 1) Intentar extraer la fecha desde la carpeta
+    if len(folder_name) == 6 and folder_name.isdigit():
+        year, month, day = f"20{folder_name[:2]}", folder_name[2:4], folder_name[4:6]
+        date_str = f"{year}{month}{day}"  # '20230123'
+    
+    # 2) Intentar extraer fecha/hora desde el nombre del archivo
+    name_without_extension = os.path.splitext(os.path.basename(file_name))[0]
+    parts = name_without_extension.split('_')
+    if len(parts) >= 1:
+        date_time_part = parts[0]  # p.e. '20230123103000'
+        if len(date_time_part) == 14 and date_time_part.isdigit():
+            date_str = date_time_part[:8]   # '20230123'
+            time_str = date_time_part[8:]   # '103000'
+    
+    # 3) Formatear fecha y hora a un formato legible
+    try:
+        date_obj = datetime.strptime(date_str, "%Y%m%d")
+        date_str = date_obj.strftime("%Y-%m-%d")
+    except:
+        date_str = "Unknown"
+    try:
+        time_obj = datetime.strptime(time_str, "%H%M%S")
+        time_str = time_obj.strftime("%H:%M:%S")
+    except:
+        time_str = "Unknown"
 
+    return date_str, time_str
+
+def rutaHistorial_archivo_autotest(codigo, directorio):
+    """
+    Recorre el 'directorio' buscando en carpetas PASS y FAIL archivos .csv
+    cuyo nombre contenga 'codigo'. Devuelve una lista de diccionarios con la
+    información (hostname, status, file_path, date_str, time_str).
+    """
+    resultado_busqueda = []
+    for hostname in os.listdir(directorio):
+        hostname_path = os.path.join(directorio, hostname)
+        if not os.path.isdir(hostname_path):
+            continue
+
+        for root, dirs, files in os.walk(hostname_path):
+            if "PASS" in root.upper():
+                default_result = "PASS"
+            elif "FAIL" in root.upper():
+                default_result = "FAIL"
+            else:
+                continue
+
+            for file in files:
+                if file.lower().endswith(".csv") and codigo in file:
+                    file_path = os.path.join(root, file)
+                    folder_name = os.path.basename(root)
+                    date_str, time_str = extraer_fecha_y_hora(folder_name, file)
+                    resultado_busqueda.append({
+                        "hostname": hostname,
+                        "status": default_result,
+                        "file_path": file_path,
+                        "date_str": date_str,
+                        "time_str": time_str
+                    })
+    
+    # Ordenar ascendente por fecha/hora
+    def parse_datetime(d_str, t_str):
+        if d_str == "Unknown" or t_str == "Unknown":
+            return None
+        try:
+            return datetime.strptime(d_str + t_str, "%Y-%m-%d%H:%M:%S")
+        except ValueError:
+            return None
+
+    resultado_busqueda.sort(key=lambda x: parse_datetime(x["date_str"], x["time_str"]) or datetime.min)
+    return resultado_busqueda
+
+# ------------------------------------------------------------------------------
+# CLASE PRINCIPAL
+# ------------------------------------------------------------------------------
 class UptimeBot(ttk.Frame):
     def __init__(self, master=None, **kwargs):
         super().__init__(master, **kwargs)
         self.pack(fill="both", expand=True)
 
         self.directorio = None
-        self.selected_type = None  # Indica qué ruta se ha seleccionado
+        self.selected_type = None
         self.table_records = []
+        self.sort_descending = False  # Para alternar el orden de clasificación en el historial
 
+        # Creamos estilos para los botones de ruta: normal y seleccionado.
+        self.style = ttk.Style()
+        self.style.configure("Montserrat.TButton", font=("Montserrat", 12, "bold"))
+        self.style.map("Montserrat.TButton",
+                       background=[("active", "#0052cc")],
+                       foreground=[("active", "white")])
+        self.style.configure("Selected.TButton", font=("Montserrat", 12, "bold"),
+                             background="#0052cc", foreground="white")
+        
         # ----------------------------------------------------------------
         #   FRAME SUPERIOR (Logo, Fail-Tracker, Testing UNAE)
         # ----------------------------------------------------------------
@@ -36,38 +143,68 @@ class UptimeBot(ttk.Frame):
         logo_label_img = ttk.Label(button_frame, image=self.logo_mirgor)
         logo_label_img.grid(row=0, column=0, sticky="w", padx=10)
 
-        # Fail-Tracker en el centro (con fuente Montserrat)
+        # Fail-Tracker en el centro
         fail_tracker_label = ttk.Label(
             button_frame,
-            text="[Fail-Tracker]",
-            font=("Futura", 32, "bold"),  # Cambia "Futura" por "Montserrat" si la tienes instalada.
-            anchor="center"
+            text="[CLARE-TRACKER]",
+            font=("Chakra Petch", 32, "bold"),
+            anchor="center",
         )
         fail_tracker_label.grid(row=0, column=1, sticky="nsew", padx=10)
 
-        # Testing UNAE a la derecha (con fuente Montserrat)
+        # Testing UNAE a la derecha
         logo_label_txt = ttk.Label(
             button_frame,
             text="Testing UNAE",
-            font=("Montserrat", 32, "bold")
+            font=("Montserrat", 32, "bold"),
         )
         logo_label_txt.grid(row=0, column=2, sticky="e", padx=10)
 
         # ----------------------------------------------------------------
-        #   FRAME IZQUIERDO: S/N + Submit
+        #   FRAME IZQUIERDO: S/N + Submit + Historial
         # ----------------------------------------------------------------
         url_frame = ttk.Frame(self)
         url_frame.grid(row=1, column=0, sticky="n", padx=20)
-        center_frame = ttk.Frame(url_frame)
-        center_frame.pack(expand=True, fill="both")
-        url_label = ttk.Label(center_frame, text="Scan S/N", font=("Montserrat", 14, "bold"))
+        url_frame.columnconfigure(0, weight=1)
+        url_frame.rowconfigure(0, weight=0)
+        url_frame.rowconfigure(1, weight=1)
+
+        # Parte superior: Label + Entry + Botón "Cargar"
+        top_frame = ttk.Frame(url_frame)
+        top_frame.grid(row=0, column=0, sticky="n")
+        url_label = ttk.Label(top_frame, text="Scan S/N", font=("Montserrat", 14, "bold"))
         url_label.pack(anchor="center", pady=5)
-        self.url_entry = ttk.Entry(center_frame, width=25)
+        self.url_entry = ttk.Entry(top_frame, width=25)
         self.url_entry.pack(anchor="center", pady=5)
-        url_actions = ttk.Frame(center_frame)
+        url_actions = ttk.Frame(top_frame)
         url_actions.pack(anchor="center", pady=5)
         submit_button = ttk.Button(url_actions, text="Cargar", command=self.on_submit)
         submit_button.pack(anchor="center")
+
+        # Parte inferior: Frame para el historial
+        help_frame = ttk.Frame(url_frame)
+        help_frame.grid(row=1, column=0, sticky="n", pady=10)
+        help_frame.rowconfigure(0, weight=1)
+        # Treeview para mostrar el historial
+        self.history_tree = ttk.Treeview(
+            help_frame,
+            columns=("Hostname", "Status", "Fecha", "Hora", "Archivo"),
+            show="headings"
+        )
+        self.history_tree.heading("Hostname", text="Hostname")
+        self.history_tree.heading("Status", text="Status")
+        self.history_tree.heading("Fecha", text="Fecha")
+        self.history_tree.heading("Hora", text="Hora")
+        self.history_tree.heading("Archivo", text="Archivo")
+        self.history_tree.column("Hostname", width=100, anchor="center")
+        self.history_tree.column("Status", width=70, anchor="center")
+        self.history_tree.column("Fecha", width=80, anchor="center")
+        self.history_tree.column("Hora", width=80, anchor="center")
+        self.history_tree.column("Archivo", width=100, anchor="w")
+        self.history_tree.pack(padx=5, pady=5, fill="both", expand=True)
+        # Botón para ordenar por fecha (abajo del Treeview)
+        order_button = ttk.Button(help_frame, text="Ordenar por Fecha", command=self.ordenar_por_fecha)
+        order_button.pack(pady=5)
 
         # ----------------------------------------------------------------
         #   FRAME DERECHO: Tabla + Log
@@ -78,8 +215,12 @@ class UptimeBot(ttk.Frame):
         history_info.pack(fill="x", expand=False, side="top")
         history_label = ttk.Label(history_info, text="Seguimiento", font=("Montserrat", 14, "bold"))
         history_label.pack(side="left")
+        # Botón "Exportar"
         history_download = ttk.Button(history_info, text="Exportar", command=self.download_csv)
-        history_download.pack(side="right", fill="both")
+        history_download.pack(side="right", padx=5)
+        # Botón "Limpiar Pantalla" al lado
+        clear_button = ttk.Button(history_info, text="Limpiar Pantalla", command=self.clear_screen)
+        clear_button.pack(side="right", padx=5)
         columns = ("Hora", "S/N", "TIPO", "FALLA")
         self.history_table = ttk.Treeview(history_frame, columns=columns, show="headings")
         self.history_table.pack(fill="both", expand=True, side="top")
@@ -96,29 +237,26 @@ class UptimeBot(ttk.Frame):
         self.history_log = ScrolledText(history_frame, height=10)
         self.history_log.pack(fill="both", expand=True)
 
+        # Evento para mostrar log al seleccionar un registro
+        self.history_table.bind("<<TreeviewSelect>>", self.on_record_select)
+
         # ----------------------------------------------------------------
         #   FRAME INFERIOR: Botones para selección de rutas
         # ----------------------------------------------------------------
-        # Definimos un estilo personalizado para los botones con fuente Montserrat
-        style = ttk.Style()
-        style.configure("Montserrat.TButton", font=("Montserrat", 12, "bold"))
-        style.map("Montserrat.TButton",
-          background=[("active", "#0052cc")],  # Fondo azul al hacer hover
-          foreground=[("active", "white")])
-
         path_frame = ttk.Frame(self)
         path_frame.grid(row=3, column=0, columnspan=2, sticky="ew", padx=10, pady=10)
-        # Configuramos tres columnas iguales para centrar los botones
         path_frame.columnconfigure(0, weight=1)
         path_frame.columnconfigure(1, weight=1)
         path_frame.columnconfigure(2, weight=1)
-        btn_path1 = ttk.Button(path_frame, text="AutoTest", command=self.set_autotest_path, style="Montserrat.TButton")
-        btn_path1.grid(row=0, column=0, padx=5, pady=5, sticky="ew")
-        btn_path2 = ttk.Button(path_frame, text="Segurity", command=self.set_segurity_path, style="Montserrat.TButton")
-        btn_path2.grid(row=0, column=1, padx=5, pady=5, sticky="ew")
-        btn_path3 = ttk.Button(path_frame, text="ManualInspection", command=self.set_manual_path, style="Montserrat.TButton")
-        btn_path3.grid(row=0, column=2, padx=5, pady=5, sticky="ew")
+        # Creamos referencias para poder actualizar el estilo al seleccionar
+        self.btn_autotest = ttk.Button(path_frame, text="AutoTest", command=self.set_autotest_path, style="Montserrat.TButton")
+        self.btn_autotest.grid(row=0, column=0, padx=5, pady=5, sticky="ew")
+        self.btn_segurity = ttk.Button(path_frame, text="Segurity", command=self.set_segurity_path, style="Montserrat.TButton")
+        self.btn_segurity.grid(row=0, column=1, padx=5, pady=5, sticky="ew")
+        self.btn_manual = ttk.Button(path_frame, text="ManualInspection", command=self.set_manual_path, style="Montserrat.TButton")
+        self.btn_manual.grid(row=0, column=2, padx=5, pady=5, sticky="ew")
 
+        # Configuración de las filas y columnas principales
         self.columnconfigure(0, weight=3)
         self.columnconfigure(1, weight=7)
         self.rowconfigure(0, weight=2)
@@ -126,6 +264,9 @@ class UptimeBot(ttk.Frame):
         self.rowconfigure(2, weight=4)
         self.rowconfigure(3, weight=1)
 
+    # ----------------------------------------------------------------
+    # MÉTODOS PRINCIPALES
+    # ----------------------------------------------------------------
     def download_csv(self):
         filename = filedialog.asksaveasfilename(
             defaultextension=".csv",
@@ -142,7 +283,7 @@ class UptimeBot(ttk.Frame):
                 writer = csv.writer(f)
                 writer.writerow(["Hora", "S/N", "TIPO", "FALLA"])
                 for row in self.table_records:
-                    writer.writerow(row)
+                    writer.writerow(row[:4])
             msg = f"Registros exportados a '{filename}' con éxito."
             print(msg)
             self.history_log.insert("end", msg + "\n")
@@ -155,16 +296,26 @@ class UptimeBot(ttk.Frame):
         self.directorio = ManualInspection_path
         self.selected_type = "ManualInspection"
         print(f"[DEBUG] Ruta seleccionada para ManualInspection: {self.directorio}")
+        # Actualizamos estilos: este botón se marca como seleccionado
+        self.btn_manual.config(style="Selected.TButton")
+        self.btn_autotest.config(style="Montserrat.TButton")
+        self.btn_segurity.config(style="Montserrat.TButton")
 
     def set_segurity_path(self):
         self.directorio = Segurity_path
         self.selected_type = "Segurity"
         print(f"[DEBUG] Ruta seleccionada para Segurity: {self.directorio}")
+        self.btn_segurity.config(style="Selected.TButton")
+        self.btn_autotest.config(style="Montserrat.TButton")
+        self.btn_manual.config(style="Montserrat.TButton")
 
     def set_autotest_path(self):
         self.directorio = Autotest_path
         self.selected_type = "AutoTest"
         print(f"[DEBUG] Ruta seleccionada para AutoTest: {self.directorio}")
+        self.btn_autotest.config(style="Selected.TButton")
+        self.btn_segurity.config(style="Montserrat.TButton")
+        self.btn_manual.config(style="Montserrat.TButton")
 
     def on_submit(self):
         if not self.directorio:
@@ -230,23 +381,109 @@ class UptimeBot(ttk.Frame):
         hora_actual = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         tipo_value = fail_row[0] if len(fail_row) > 0 else ""
         falla_value = " | ".join(fail_row[1:]) if len(fail_row) > 1 else ""
-        new_record = (hora_actual, sn_value, tipo_value, falla_value)
+        new_record = (hora_actual, sn_value, tipo_value, falla_value, file_content)
         self.table_records.insert(0, new_record)
         self._rebuild_table()
-        self.history_log.insert("end", f"{file_content}")
+        self.history_log.delete("1.0", "end")
+        self.history_log.insert("end", file_content)
+
+        # Al presionar "Cargar", se ejecuta la búsqueda en el historial (para mostrar PASS/FAIL)
+        self.buscar_historial()
 
     def _rebuild_table(self):
         for item in self.history_table.get_children():
             self.history_table.delete(item)
-        for row in self.table_records:
-            self.history_table.insert("", "end", values=row)
+        for index, row in enumerate(self.table_records):
+            self.history_table.insert("", "end", iid=index, values=row[:4])
+
+    def on_record_select(self, event):
+        selected = self.history_table.focus()
+        if selected:
+            try:
+                index = int(selected)
+                record = self.table_records[index]
+                log_content = record[4]
+                self.history_log.delete("1.0", "end")
+                self.history_log.insert("end", log_content)
+            except (ValueError, IndexError) as e:
+                print(f"[ERROR] Al recuperar el log del registro: {e}")
+
+    def buscar_historial(self):
+        """Busca en el historial de AutoTest (carpetas PASS y FAIL) y muestra en el Treeview."""
+        if not self.directorio:
+            print("[ERROR] No se ha seleccionado un directorio para historial.")
+            return
+        codigo = self.url_entry.get().strip()
+        if not codigo:
+            print("[WARN] Ingrese un código para buscar en el historial.")
+            return
+        
+        registros = rutaHistorial_archivo_autotest(codigo, self.directorio)
+        if self.sort_descending:
+            registros = list(reversed(registros))
+        
+        for item in self.history_tree.get_children():
+            self.history_tree.delete(item)
+        
+        for reg in registros:
+            self.history_tree.insert(
+                "", "end",
+                values=(
+                    reg["hostname"],
+                    reg["status"],
+                    reg["date_str"],
+                    reg["time_str"],
+                    reg["file_path"]
+                )
+            )
+
+    def ordenar_por_fecha(self):
+        """Alterna el orden de clasificación (asc/desc) y vuelve a cargar el historial."""
+        self.sort_descending = not self.sort_descending
+        self.buscar_historial()
+
+    def clear_screen(self):
+        """Pregunta al usuario y, si confirma, limpia el log, el Treeview del historial y la tabla de seguimientos."""
+        if messagebox.askyesno("Confirmar", "¿Está seguro de que desea limpiar la pantalla?"):
+            # Limpiar el widget del log
+            self.history_log.delete("1.0", tk.END)
+            # Limpiar el Treeview del historial
+            for item in self.history_tree.get_children():
+                self.history_tree.delete(item)
+            # Limpiar la tabla de seguimientos (Treeview derecho)
+            for item in self.history_table.get_children():
+                self.history_table.delete(item)
+            # Opcional: Limpiar los registros almacenados internamente
+            self.table_records.clear()
 
 def main():
     root = tk.Tk()
     root.title("CLARE by [Testing UNAE]")
     root.geometry("1280x720")
+
+    # Fondo principal blanco
+    root.configure(bg="#FFFFFF")
+
+    # Configurar estilos con ttk y usar el tema 'clam' para mayor personalización
+    style = ttk.Style()
+    style.theme_use("clam")
+    
+    # Fondo blanco para todos los frames
+    style.configure("TFrame", background="#FFFFFF")
+    
+    # Estilo general para labels: fondo blanco y texto azul vibrante
+    style.configure("TLabel", background="#FFFFFF", foreground="#000000", font=("Chakra Petch", 12))
+    
+    # Estilo para botones: fondo azul vibrante y texto blanco
+    style.configure("TButton", font=("Montserrat", 12, "bold"), background="#0040FF", foreground="#FFFFFF")
+    style.map("TButton",
+              background=[("active", "#0040FF")],
+              foreground=[("active", "#DEDCD3")])
+    
+    # Inicia la aplicación
     app = UptimeBot(master=root)
     app.mainloop()
 
 if __name__ == "__main__":
     main()
+
