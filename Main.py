@@ -7,102 +7,17 @@ import os
 from tkinter import filedialog, messagebox
 from PIL import Image, ImageTk
 from Process import Autotest_path, Segurity_path, ManualInspection_path
-from Autotest import (
+from Funciones_Procesado import (
     buscar_archivo_autotest,
     procesar_archivo_autotest,
     buscar_archivo_segurity,
     procesar_archivo_segurity,
     buscar_archivo_manual,
-    procesar_archivo_manual
+    procesar_archivo_manual,
+    rutaHistorial_archivo_autotest,
+    rutaHistorial_archivo_segurity,
+    rutaHistorial_archivo_manual_inspection
 )
-
-# ------------------------------------------------------------------------------
-# FUNCIONES PARA HISTORIAL
-# ------------------------------------------------------------------------------
-def extraer_fecha_y_hora(folder_name, file_name):
-    """
-    Extrae la fecha y la hora usando:
-    - El nombre de la carpeta (folder_name) => '230123' => 2023-01-23
-    - El nombre del archivo (file_name) => '20230123103000_codigo.csv'
-    
-    Luego, intenta formatear fecha/hora a un formato más legible (YYYY-MM-DD y HH:MM:SS).
-    Si no puede parsear, usa 'Unknown'.
-    """
-    date_str = "Unknown"
-    time_str = "Unknown"
-    
-    # 1) Intentar extraer la fecha desde la carpeta
-    if len(folder_name) == 6 and folder_name.isdigit():
-        year, month, day = f"20{folder_name[:2]}", folder_name[2:4], folder_name[4:6]
-        date_str = f"{year}{month}{day}"  # '20230123'
-    
-    # 2) Intentar extraer fecha/hora desde el nombre del archivo
-    name_without_extension = os.path.splitext(os.path.basename(file_name))[0]
-    parts = name_without_extension.split('_')
-    if len(parts) >= 1:
-        date_time_part = parts[0]  # p.e. '20230123103000'
-        if len(date_time_part) == 14 and date_time_part.isdigit():
-            date_str = date_time_part[:8]   # '20230123'
-            time_str = date_time_part[8:]   # '103000'
-    
-    # 3) Formatear fecha y hora a un formato legible
-    try:
-        date_obj = datetime.strptime(date_str, "%Y%m%d")
-        date_str = date_obj.strftime("%Y-%m-%d")
-    except:
-        date_str = "Unknown"
-    try:
-        time_obj = datetime.strptime(time_str, "%H%M%S")
-        time_str = time_obj.strftime("%H:%M:%S")
-    except:
-        time_str = "Unknown"
-
-    return date_str, time_str
-
-def rutaHistorial_archivo_autotest(codigo, directorio):
-    """
-    Recorre el 'directorio' buscando en carpetas PASS y FAIL archivos .csv
-    cuyo nombre contenga 'codigo'. Devuelve una lista de diccionarios con la
-    información (hostname, status, file_path, date_str, time_str).
-    """
-    resultado_busqueda = []
-    for hostname in os.listdir(directorio):
-        hostname_path = os.path.join(directorio, hostname)
-        if not os.path.isdir(hostname_path):
-            continue
-
-        for root, dirs, files in os.walk(hostname_path):
-            if "PASS" in root.upper():
-                default_result = "PASS"
-            elif "FAIL" in root.upper():
-                default_result = "FAIL"
-            else:
-                continue
-
-            for file in files:
-                if file.lower().endswith(".csv") and codigo in file:
-                    file_path = os.path.join(root, file)
-                    folder_name = os.path.basename(root)
-                    date_str, time_str = extraer_fecha_y_hora(folder_name, file)
-                    resultado_busqueda.append({
-                        "hostname": hostname,
-                        "status": default_result,
-                        "file_path": file_path,
-                        "date_str": date_str,
-                        "time_str": time_str
-                    })
-    
-    # Ordenar ascendente por fecha/hora
-    def parse_datetime(d_str, t_str):
-        if d_str == "Unknown" or t_str == "Unknown":
-            return None
-        try:
-            return datetime.strptime(d_str + t_str, "%Y-%m-%d%H:%M:%S")
-        except ValueError:
-            return None
-
-    resultado_busqueda.sort(key=lambda x: parse_datetime(x["date_str"], x["time_str"]) or datetime.min)
-    return resultado_busqueda
 
 # ------------------------------------------------------------------------------
 # CLASE PRINCIPAL
@@ -139,6 +54,10 @@ class UptimeBot(ttk.Frame):
         resized_image = original_image.resize((300, 100), Image.LANCZOS)
         self.logo_mirgor = ImageTk.PhotoImage(resized_image)
 
+        clare_logo = Image.open("assets/Logo Clare.png")
+        resized_clare = clare_logo.resize((200, 150), Image.LANCZOS)
+        self.logo_clare = ImageTk.PhotoImage(resized_clare)
+        
         # Logo a la izquierda
         logo_label_img = ttk.Label(button_frame, image=self.logo_mirgor)
         logo_label_img.grid(row=0, column=0, sticky="w", padx=10)
@@ -146,19 +65,18 @@ class UptimeBot(ttk.Frame):
         # Fail-Tracker en el centro
         fail_tracker_label = ttk.Label(
             button_frame,
-            text="[CLARE-TRACKER]",
+            image=self.logo_clare,
+            anchor="center",
+        )
+        fail_tracker_label.grid(row=0, column=2, sticky="e", padx=10)
+
+        xd_tracker_label = ttk.Label(
+            button_frame,
+            text="[UN-TRACKER]",
             font=("Chakra Petch", 32, "bold"),
             anchor="center",
         )
-        fail_tracker_label.grid(row=0, column=1, sticky="nsew", padx=10)
-
-        # Testing UNAE a la derecha
-        logo_label_txt = ttk.Label(
-            button_frame,
-            text="Testing UNAE",
-            font=("Montserrat", 32, "bold"),
-        )
-        logo_label_txt.grid(row=0, column=2, sticky="e", padx=10)
+        xd_tracker_label.grid(row=0, column=1, sticky="nsew", padx=10)
 
         # ----------------------------------------------------------------
         #   FRAME IZQUIERDO: S/N + Submit + Historial
@@ -178,7 +96,7 @@ class UptimeBot(ttk.Frame):
         self.url_entry.pack(anchor="center", pady=5)
         url_actions = ttk.Frame(top_frame)
         url_actions.pack(anchor="center", pady=5)
-        submit_button = ttk.Button(url_actions, text="Cargar", command=self.on_submit)
+        submit_button = ttk.Button(url_actions, text="Buscar", command=self.on_submit)
         submit_button.pack(anchor="center")
 
         # Parte inferior: Frame para el historial
@@ -335,32 +253,14 @@ class UptimeBot(ttk.Frame):
         if self.selected_type == "AutoTest":
             csv_path = buscar_archivo_autotest(sn_value, self.directorio)
             if csv_path is not None:
-                try:
-                    with open(csv_path, "r", encoding="utf-8") as f:
-                        file_content = f.read()
-                except UnicodeDecodeError:
-                    with open(csv_path, "r", encoding="cp1252") as f:
-                        file_content = f.read()
                 fail_row = procesar_archivo_autotest(csv_path)
         elif self.selected_type == "Segurity":
             csv_path = buscar_archivo_segurity(sn_value, self.directorio)
             if csv_path is not None:
-                try:
-                    with open(csv_path, "r", encoding="utf-8") as f:
-                        file_content = f.read()
-                except UnicodeDecodeError:
-                    with open(csv_path, "r", encoding="cp1252") as f:
-                        file_content = f.read()
                 fail_row = procesar_archivo_segurity(csv_path)
         elif self.selected_type == "ManualInspection":
             csv_path = buscar_archivo_manual(sn_value, self.directorio)
             if csv_path is not None:
-                try:
-                    with open(csv_path, "r", encoding="utf-8") as f:
-                        file_content = f.read()
-                except UnicodeDecodeError:
-                    with open(csv_path, "r", encoding="cp1252") as f:
-                        file_content = f.read()
                 fail_row = procesar_archivo_manual(csv_path)
         else:
             print("[ERROR] Tipo de directorio no reconocido.")
@@ -372,22 +272,34 @@ class UptimeBot(ttk.Frame):
             self.history_log.insert("end", msg + "\n")
             return
 
+        try:
+            with open(csv_path, "r", encoding="utf-8") as f:
+                file_content = f.readlines()
+        except UnicodeDecodeError:
+            with open(csv_path, "r", encoding="cp1252") as f:
+                file_content = f.readlines()
+
         if not fail_row:
             msg = f"[INFO] No se encontraron filas con FAIL en el CSV '{csv_path}'."
             print(msg)
             self.history_log.insert("end", msg + "\n")
             return
 
+        # Mostrar contenido en `history_log` resaltando la fila con FAIL
+        self.history_log.tag_configure("highlight", background="yellow")
+
+        for i, line in enumerate(file_content):
+            self.history_log.insert("end", line)
+            if fail_row and ",".join(fail_row) in line:
+                self.history_log.tag_add("highlight", f"{i + 1}.0", f"{i + 1}.end")
+
         hora_actual = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         tipo_value = fail_row[0] if len(fail_row) > 0 else ""
         falla_value = " | ".join(fail_row[1:]) if len(fail_row) > 1 else ""
-        new_record = (hora_actual, sn_value, tipo_value, falla_value, file_content)
+        new_record = (hora_actual, sn_value, tipo_value, falla_value, "".join(file_content))
+    
         self.table_records.insert(0, new_record)
         self._rebuild_table()
-        self.history_log.delete("1.0", "end")
-        self.history_log.insert("end", file_content)
-
-        # Al presionar "Cargar", se ejecuta la búsqueda en el historial (para mostrar PASS/FAIL)
         self.buscar_historial()
 
     def _rebuild_table(self):
@@ -409,7 +321,8 @@ class UptimeBot(ttk.Frame):
                 print(f"[ERROR] Al recuperar el log del registro: {e}")
 
     def buscar_historial(self):
-        """Busca en el historial de AutoTest (carpetas PASS y FAIL) y muestra en el Treeview."""
+        """Busca en el historial según el tipo de directorio (AutoTest, Segurity, ManualInspection)
+        y muestra los registros en el Treeview."""
         if not self.directorio:
             print("[ERROR] No se ha seleccionado un directorio para historial.")
             return
@@ -417,14 +330,26 @@ class UptimeBot(ttk.Frame):
         if not codigo:
             print("[WARN] Ingrese un código para buscar en el historial.")
             return
-        
-        registros = rutaHistorial_archivo_autotest(codigo, self.directorio)
+
+        # Seleccionar la función de búsqueda según el tipo
+        if self.selected_type == "AutoTest":
+            registros = rutaHistorial_archivo_autotest(codigo, self.directorio)
+        elif self.selected_type == "Segurity":
+            registros = rutaHistorial_archivo_segurity(codigo, self.directorio)
+        elif self.selected_type == "ManualInspection":
+            registros = rutaHistorial_archivo_manual_inspection(codigo, self.directorio)
+        else:
+            print("[ERROR] Tipo de directorio no reconocido para historial.")
+            return
+
         if self.sort_descending:
             registros = list(reversed(registros))
-        
+
+        # Limpia el Treeview actual
         for item in self.history_tree.get_children():
             self.history_tree.delete(item)
-        
+
+        # Inserta cada registro en el Treeview
         for reg in registros:
             self.history_tree.insert(
                 "", "end",
@@ -436,6 +361,7 @@ class UptimeBot(ttk.Frame):
                     reg["file_path"]
                 )
             )
+
 
     def ordenar_por_fecha(self):
         """Alterna el orden de clasificación (asc/desc) y vuelve a cargar el historial."""
@@ -475,7 +401,7 @@ def main():
     style.configure("TLabel", background="#FFFFFF", foreground="#000000", font=("Chakra Petch", 12))
     
     # Estilo para botones: fondo azul vibrante y texto blanco
-    style.configure("TButton", font=("Montserrat", 12, "bold"), background="#0040FF", foreground="#FFFFFF")
+    style.configure("TButton", font=("Montserrat", 12, "bold"), background="#141736", foreground="#FFFFFF")
     style.map("TButton",
               background=[("active", "#0040FF")],
               foreground=[("active", "#DEDCD3")])
