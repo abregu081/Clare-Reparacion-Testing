@@ -1,0 +1,13 @@
+Mandatorios
+- Modificar la stuctura de procesamientos de la app
+- Hacerla modular y altamente scalable. 
+
+Importantes:
+-Agregado de botton para cambio de path junto con el guardado
+-Carga automatica cuando scanea un UN valido (cantidad de caracteres) 
+-
+
+Detalles:
+-Cambio al costado al lado del grid de histrorial registros. 
+
+
