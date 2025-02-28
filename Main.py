@@ -1,4 +1,3 @@
-# main.py
 import tkinter as tk
 from tkinter import ttk
 from tkinter.scrolledtext import ScrolledText
@@ -8,17 +7,8 @@ import os
 from tkinter import filedialog, messagebox
 from PIL import Image, ImageTk
 
-# Importamos el diccionario con la información de cada módulo:
-# { 
-#   "AutoTest": {
-#       "path": "E:\\Seguimiento_Autotest_temporal",
-#       "buscar": <func buscar_archivo_autotest>,
-#       "procesar": <func procesar_archivo_autotest>,
-#       "historial": <func rutaHistorial_archivo_autotest>
-#   },
-#   ...
-# }
-from Process import MODULES_INFO
+# Importamos desde Process.py la info de módulos y la ruta del cfg
+from Process import MODULES_INFO, cfg_file, read_setting
 
 class UptimeBot(ttk.Frame):
     def __init__(self, master=None, **kwargs):
@@ -29,17 +19,26 @@ class UptimeBot(ttk.Frame):
         self.selected_type = None
         self.table_records = []
         self.sort_descending = False  # Para alternar el orden de clasificación en el historial
-        
+
+        # Para manejar la ventana de admin
+        self.admin_window = None  # Referencia a la Toplevel de administración (inicialmente None)
+
         # ----------------------------------------------------------------
         #   CONFIGURACIÓN DE ESTILOS
         # ----------------------------------------------------------------
         self.style = ttk.Style()
         self.style.configure("Montserrat.TButton", font=("Montserrat", 12, "bold"))
-        self.style.map("Montserrat.TButton",
-                       background=[("active", "#0052cc")],
-                       foreground=[("active", "white")])
-        self.style.configure("Selected.TButton", font=("Montserrat", 12, "bold"),
-                             background="#0052cc", foreground="white")
+        self.style.map(
+            "Montserrat.TButton",
+            background=[("active", "#0052cc")],
+            foreground=[("active", "white")]
+        )
+        self.style.configure(
+            "Selected.TButton",
+            font=("Montserrat", 12, "bold"),
+            background="#0052cc",
+            foreground="white"
+        )
         
         # ----------------------------------------------------------------
         #   FRAME SUPERIOR (Logo, etc.)
@@ -68,9 +67,12 @@ class UptimeBot(ttk.Frame):
         fail_tracker_label.grid(row=0, column=2, sticky="e", padx=10)
 
         # Texto en el centro
-        xd_tracker_label = ttk.Label(button_frame, text="[UN-TRACKER]",
-                                     font=("Chakra Petch", 32, "bold"),
-                                     anchor="center")
+        xd_tracker_label = ttk.Label(
+            button_frame,
+            text="[UN-TRACKER]",
+            font=("Chakra Petch", 32, "bold"),
+            anchor="center"
+        )
         xd_tracker_label.grid(row=0, column=1, sticky="nsew", padx=10)
 
         # ----------------------------------------------------------------
@@ -118,13 +120,25 @@ class UptimeBot(ttk.Frame):
         self.history_tree.column("Hora", width=80, anchor="center")
         self.history_tree.column("Archivo", width=100, anchor="w")
 
-
+        # Estilo pequeño para el botón de ordenar
         style_small = ttk.Style()
-        style_small.configure("SmallButton.TButton", font=("Montserrat", 10),padding=(5,2))
-        # Ponemos el tree en la fila 0, col 0
+        style_small.configure(
+            "SmallButton.TButton",
+            font=("Montserrat", 10),
+            padding=(5,2)
+        )
+
+        # Treeview en la columna 0
         self.history_tree.grid(row=0, column=0, sticky="nsew")
-        # Botón para ordenar por fecha
-        order_button = ttk.Button(help_frame, text="↑", width= 3, style= "SmallButton.TButton",command=self.ordenar_por_fecha)
+
+        # Botón para ordenar por fecha (columna 1)
+        order_button = ttk.Button(
+            help_frame,
+            text="↑",
+            width=3,
+            style="SmallButton.TButton",
+            command=self.ordenar_por_fecha
+        )
         order_button.grid(row=0, column=1, sticky="n")
 
         # ----------------------------------------------------------------
@@ -147,9 +161,17 @@ class UptimeBot(ttk.Frame):
         clear_button = ttk.Button(history_info, text="Limpiar Pantalla", command=self.clear_screen)
         clear_button.pack(side="right", padx=5)
 
+        # ──────────────────────────────────────────────────────────────────
+        # BOTÓN “Admin”
+        # ──────────────────────────────────────────────────────────────────
+        admin_button = ttk.Button(history_info, text="Admin", command=self.show_admin_window)
+        admin_button.pack(side="right", padx=5)
+        # ──────────────────────────────────────────────────────────────────
+
         columns = ("Hora", "S/N", "TIPO", "FALLA")
         self.history_table = ttk.Treeview(history_frame, columns=columns, show="headings")
         self.history_table.pack(fill="both", expand=True, side="top")
+
         self.history_table.heading("Hora", text="Hora")
         self.history_table.heading("S/N", text="S/N")
         self.history_table.heading("TIPO", text="TIPO")
@@ -176,7 +198,6 @@ class UptimeBot(ttk.Frame):
         path_frame.grid(row=3, column=0, columnspan=2, sticky="ew", padx=10, pady=10)
 
         # Para que los botones se distribuyan bien, definimos un número de columnas dinámico
-        # según la cantidad de módulos cargados.
         num_modulos = len(MODULES_INFO)
         for i in range(num_modulos):
             path_frame.columnconfigure(i, weight=1)
@@ -184,16 +205,20 @@ class UptimeBot(ttk.Frame):
         # Diccionario para acceder luego a cada botón y cambiar estilos
         self.module_buttons = {}
 
-        # Creación de botones de manera dinámica
-        for idx, module_name in enumerate(MODULES_INFO):
+        # Creación de botones de manera dinámica (solo si 'enabled' es True)
+        col_idx = 0
+        for module_name, mod_info in MODULES_INFO.items():
+            if not mod_info.get("enabled", True):
+                continue  # si un módulo está desactivado en Parametros.cfg, no se muestra
             btn = ttk.Button(
                 path_frame,
                 text=module_name,
                 command=lambda m=module_name: self.set_module(m),
                 style="Montserrat.TButton"
             )
-            btn.grid(row=0, column=idx, padx=5, pady=5, sticky="ew")
+            btn.grid(row=0, column=col_idx, padx=5, pady=5, sticky="ew")
             self.module_buttons[module_name] = btn
+            col_idx += 1
 
         # Ajustes de pesos en la ventana principal
         self.columnconfigure(0, weight=3)
@@ -340,7 +365,8 @@ class UptimeBot(ttk.Frame):
         # Inserta cada registro en el Treeview
         for reg in registros:
             self.history_tree.insert(
-                "", "end",
+                "",
+                "end",
                 values=(
                     reg["hostname"],
                     reg["status"],
@@ -394,6 +420,117 @@ class UptimeBot(ttk.Frame):
             err_msg = f"Error al exportar CSV: {e}"
             print(err_msg)
             self.history_log.insert("end", err_msg + "\n")
+
+    # ----------------------------------------------------------------
+    #   MÉTODOS PARA ADMIN WINDOW
+    # ----------------------------------------------------------------
+    def show_admin_window(self):
+        """Abre una ventana Toplevel con checkbuttons y rutas de cada módulo."""
+        if self.admin_window and tk.Toplevel.winfo_exists(self.admin_window):
+            # Si la ventana ya está abierta, solo traerla al frente
+            self.admin_window.lift()
+            return
+
+        self.admin_window = tk.Toplevel(self.master)
+        self.admin_window.title("Administración de Módulos")
+        self.admin_window.geometry("600x300")
+
+        # Creamos un frame dentro de la Toplevel
+        admin_frame = ttk.Frame(self.admin_window)
+        admin_frame.pack(fill="both", expand=True, padx=10, pady=10)
+
+        # Título
+        ttk.Label(
+            admin_frame,
+            text="Habilitar/Deshabilitar Módulos y Modificar Rutas",
+            font=("Montserrat", 14, "bold")
+        ).grid(row=0, column=0, columnspan=3, sticky="w", pady=5)
+
+        self.modules_vars = {}
+        row_index = 1
+
+        # Creación dinámica de checkbuttons y labels/rutas
+        for module_name, mod_info in MODULES_INFO.items():
+            var = tk.BooleanVar(value=mod_info.get("enabled", True))
+            self.modules_vars[module_name] = var
+
+            cb = ttk.Checkbutton(admin_frame, text=module_name, variable=var)
+            cb.grid(row=row_index, column=0, sticky="w", pady=2)
+
+            # Etiqueta con la ruta actual
+            ruta_label = ttk.Label(admin_frame, text=mod_info["path"], width=40)
+            ruta_label.grid(row=row_index, column=1, sticky="w", pady=2)
+
+            # Botón "Seleccionar Ruta"
+            def make_callback(m=module_name, lab=ruta_label):
+                return lambda: self.on_select_path(m, lab)
+
+            sel_btn = ttk.Button(
+                admin_frame,
+                text="Seleccionar Ruta",
+                command=make_callback()
+            )
+            sel_btn.grid(row=row_index, column=2, padx=5)
+            row_index += 1
+
+        # Botón "Guardar Cambios"
+        save_btn = ttk.Button(admin_frame, text="Guardar Cambios", command=self.save_config)
+        save_btn.grid(row=row_index, column=0, columnspan=3, pady=10)
+
+    def on_select_path(self, module_name, ruta_label):
+        """Abre un filedialog para seleccionar una carpeta y actualiza la ruta en MODULES_INFO."""
+        new_dir = filedialog.askdirectory(title=f"Seleccionar ruta para {module_name}")
+        if new_dir:
+            MODULES_INFO[module_name]["path"] = new_dir
+            ruta_label.config(text=new_dir)
+            print(f"[INFO] Ruta actualizada para {module_name}: {new_dir}")
+
+    def save_config(self):
+        """
+        Guarda los cambios en Parametros.cfg:
+          - Activa/desactiva módulos según los checkbuttons
+          - Actualiza la ruta si se cambió
+        """
+        # Leemos el archivo actual
+        settings = read_setting(cfg_file)
+
+        # Reconstruimos la lista "Modulos" y guardamos enabled/rutas
+        module_list = []
+        for mod_name, mod_info in MODULES_INFO.items():
+            # Estado (enabled/disabled) a partir de los checkbuttons
+            new_state = self.modules_vars[mod_name].get()
+            mod_info["enabled"] = new_state
+            settings[f"{mod_name}_enabled"] = "True" if new_state else "False"
+
+            # Ruta
+            settings[f"Directorio_{mod_name}"] = mod_info["path"]
+
+            # Si quieres que "Modulos" contenga todos:
+            module_list.append(mod_name)
+            # O solo los que están habilitados:
+            # if new_state:
+            #     module_list.append(mod_name)
+
+        settings["Modulos"] = ", ".join(module_list)
+
+        self.write_settings(cfg_file, settings)
+
+        messagebox.showinfo(
+            "Guardar Cambios",
+            "Configuración guardada exitosamente.\n(Reinicia la app para ver los cambios)."
+        )
+
+    def write_settings(self, file_path, settings_dict):
+        """
+        Reescribe Parametros.cfg con base en un diccionario.
+        ¡PERDERÁS comentarios u orden original!
+        """
+        with open(file_path, "w", encoding="utf-8") as f:
+            for k, v in settings_dict.items():
+                if isinstance(v, list):
+                    v = ", ".join(v)
+                f.write(f"{k} = {v}\n")
+
 
 def main():
     root = tk.Tk()
