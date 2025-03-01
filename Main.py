@@ -4,10 +4,11 @@ from tkinter.scrolledtext import ScrolledText
 from datetime import datetime
 import csv
 import os
+import sys
 from tkinter import filedialog, messagebox
 from PIL import Image, ImageTk
+import importlib
 
-# Importamos desde Process.py la info de módulos y la ruta del cfg
 from Process import MODULES_INFO, cfg_file, read_setting
 
 class UptimeBot(ttk.Frame):
@@ -16,12 +17,8 @@ class UptimeBot(ttk.Frame):
         self.pack(fill="both", expand=True)
 
         self.directorio = None
-        self.selected_type = None
         self.table_records = []
         self.sort_descending = False  # Para alternar el orden de clasificación en el historial
-
-        # Para manejar la ventana de admin
-        self.admin_window = None  # Referencia a la Toplevel de administración (inicialmente None)
 
         # ----------------------------------------------------------------
         #   CONFIGURACIÓN DE ESTILOS
@@ -49,7 +46,6 @@ class UptimeBot(ttk.Frame):
         button_frame.columnconfigure(1, weight=1)
         button_frame.columnconfigure(2, weight=1)
 
-        # Carga y redimensiona logos (ajusta rutas según tu proyecto)
         original_image = Image.open("assets/Logo_Mirgor.png")
         resized_image = original_image.resize((300, 100), Image.LANCZOS)
         self.logo_mirgor = ImageTk.PhotoImage(resized_image)
@@ -84,21 +80,51 @@ class UptimeBot(ttk.Frame):
         url_frame.rowconfigure(0, weight=0)
         url_frame.rowconfigure(1, weight=1)
 
-        # Parte superior: Label + Entry + Botón "Buscar"
+        # Parte superior: Label + Entry
         top_frame = ttk.Frame(url_frame)
         top_frame.grid(row=0, column=0, sticky="n")
+
         url_label = ttk.Label(top_frame, text="Scan S/N", font=("Montserrat", 14, "bold"))
         url_label.pack(anchor="center", pady=5)
 
         self.url_entry = ttk.Entry(top_frame, width=25)
         self.url_entry.pack(anchor="center", pady=5)
 
-        url_actions = ttk.Frame(top_frame)
-        url_actions.pack(anchor="center", pady=5)
-        submit_button = ttk.Button(url_actions, text="Buscar ", command=self.on_submit)
-        submit_button.pack(anchor="center")
+        # Frame para Combobox + Botones de administración
+        combo_admin_frame = ttk.Frame(url_frame)
+        combo_admin_frame.grid(row=3, column=0, sticky="n", pady=5)
 
-        # Parte inferior: Frame para el historial (treeview)
+        # Menú desplegable (Combobox) para elegir el módulo
+        enabled_mods = [m for m, info in MODULES_INFO.items() if info.get("enabled", True)]
+        self.combo_modulos = ttk.Combobox(combo_admin_frame, values=enabled_mods, state="readonly")
+        self.combo_modulos.grid(row=0, column=0, padx=5)
+
+        if enabled_mods:
+            self.combo_modulos.current(0)
+
+        # Botón "Configuraciones"
+        config_button = ttk.Menubutton(
+            combo_admin_frame,
+            text="Configuraciones"
+        )
+        config_button.grid(row=0, column=1, padx=5)
+
+        # Creamos el menú desplegable asociado a config_button
+        config_menu = tk.Menu(config_button, tearoff=False)
+        config_menu.add_command(label="Cambiar Ruta", command=self.on_change_path)
+        config_menu.add_command(label="Eliminar Módulo", command=self.on_remove_module)
+        config_menu.add_command(label="Agregar Módulo", command=self.on_add_module)
+
+        # Asignamos el menú al Menubutton
+        config_button["menu"] = config_menu
+
+        # Botón "Buscar"
+        search_btn = ttk.Button(top_frame, text="Buscar", command=self.on_submit)
+        search_btn.pack(anchor="center", pady=5)
+
+        # ----------------------------------------------------------------
+        #   FRAME para el historial (Treeview)
+        # ----------------------------------------------------------------
         help_frame = ttk.Frame(url_frame)
         help_frame.grid(row=1, column=0, sticky="nsew", pady=10)
         help_frame.rowconfigure(0, weight=1)
@@ -120,7 +146,6 @@ class UptimeBot(ttk.Frame):
         self.history_tree.column("Hora", width=80, anchor="center")
         self.history_tree.column("Archivo", width=100, anchor="w")
 
-        # Estilo pequeño para el botón de ordenar
         style_small = ttk.Style()
         style_small.configure(
             "SmallButton.TButton",
@@ -128,7 +153,6 @@ class UptimeBot(ttk.Frame):
             padding=(5,2)
         )
 
-        # Treeview en la columna 0
         self.history_tree.grid(row=0, column=0, sticky="nsew")
 
         # Botón para ordenar por fecha (columna 1)
@@ -161,13 +185,6 @@ class UptimeBot(ttk.Frame):
         clear_button = ttk.Button(history_info, text="Limpiar Pantalla", command=self.clear_screen)
         clear_button.pack(side="right", padx=5)
 
-        # ──────────────────────────────────────────────────────────────────
-        # BOTÓN “Admin”
-        # ──────────────────────────────────────────────────────────────────
-        admin_button = ttk.Button(history_info, text="Admin", command=self.show_admin_window)
-        admin_button.pack(side="right", padx=5)
-        # ──────────────────────────────────────────────────────────────────
-
         columns = ("Hora", "S/N", "TIPO", "FALLA")
         self.history_table = ttk.Treeview(history_frame, columns=columns, show="headings")
         self.history_table.pack(fill="both", expand=True, side="top")
@@ -191,35 +208,6 @@ class UptimeBot(ttk.Frame):
         # Evento para mostrar log al seleccionar un registro
         self.history_table.bind("<<TreeviewSelect>>", self.on_record_select)
 
-        # ----------------------------------------------------------------
-        #   FRAME INFERIOR: Botones para selección de rutas (DINÁMICO)
-        # ----------------------------------------------------------------
-        path_frame = ttk.Frame(self)
-        path_frame.grid(row=3, column=0, columnspan=2, sticky="ew", padx=10, pady=10)
-
-        # Para que los botones se distribuyan bien, definimos un número de columnas dinámico
-        num_modulos = len(MODULES_INFO)
-        for i in range(num_modulos):
-            path_frame.columnconfigure(i, weight=1)
-
-        # Diccionario para acceder luego a cada botón y cambiar estilos
-        self.module_buttons = {}
-
-        # Creación de botones de manera dinámica (solo si 'enabled' es True)
-        col_idx = 0
-        for module_name, mod_info in MODULES_INFO.items():
-            if not mod_info.get("enabled", True):
-                continue  # si un módulo está desactivado en Parametros.cfg, no se muestra
-            btn = ttk.Button(
-                path_frame,
-                text=module_name,
-                command=lambda m=module_name: self.set_module(m),
-                style="Montserrat.TButton"
-            )
-            btn.grid(row=0, column=col_idx, padx=5, pady=5, sticky="ew")
-            self.module_buttons[module_name] = btn
-            col_idx += 1
-
         # Ajustes de pesos en la ventana principal
         self.columnconfigure(0, weight=3)
         self.columnconfigure(1, weight=7)
@@ -231,29 +219,23 @@ class UptimeBot(ttk.Frame):
     # ----------------------------------------------------------------
     #   MÉTODOS PRINCIPALES
     # ----------------------------------------------------------------
-    def set_module(self, module_name):
-        """Selecciona el módulo en uso y cambia estilos de botones."""
-        info = MODULES_INFO.get(module_name)
-        if not info:
-            print(f"[ERROR] Módulo '{module_name}' no encontrado en MODULES_INFO")
-            return
-
-        self.selected_type = module_name
-        self.directorio = info["path"]
-
-        # Ajustamos estilo para remarcar el botón seleccionado
-        for m, btn in self.module_buttons.items():
-            if m == module_name:
-                btn.config(style="Selected.TButton")
-            else:
-                btn.config(style="Montserrat.TButton")
-
-        print(f"[DEBUG] Ruta seleccionada para {module_name}: {self.directorio}")
-
     def on_submit(self):
-        if not self.directorio:
-            print("[ERROR] No se ha seleccionado directorio todavía.")
+        """
+        - Lee qué módulo está seleccionado en el Combobox.
+        - Busca la ruta en MODULES_INFO.
+        - Busca y procesa el CSV para el S/N ingresado.
+        """
+        mod_name = self.combo_modulos.get().strip()
+        if not mod_name:
+            messagebox.showwarning("Módulo no seleccionado", "Por favor seleccione un módulo en el menú desplegable.")
             return
+
+        info_modulo = MODULES_INFO.get(mod_name)
+        if not info_modulo:
+            messagebox.showerror("Error", f"No se encontró información para el módulo '{mod_name}'")
+            return
+
+        self.directorio = info_modulo["path"]
 
         sn_value = self.url_entry.get().strip()
         if not sn_value:
@@ -265,19 +247,13 @@ class UptimeBot(ttk.Frame):
         csv_path = None
         fail_row = None
 
-        # Obtenemos las funciones del módulo seleccionado
-        info_modulo = MODULES_INFO.get(self.selected_type)
-        if not info_modulo:
-            print(f"[ERROR] No hay información de módulo para {self.selected_type}")
-            return
-
         buscar_fn = info_modulo["buscar"]
         procesar_fn = info_modulo["procesar"]
 
         # 1) Buscar
         csv_path = buscar_fn(sn_value, self.directorio)
         if csv_path is None:
-            msg = f"[INFO] No se encontró ningún archivo CSV para S/N '{sn_value}' en '{self.selected_type}'."
+            msg = f"[INFO] No se encontró ningún archivo CSV para S/N '{sn_value}' en '{mod_name}'."
             print(msg)
             self.history_log.insert("end", msg + "\n")
             return
@@ -286,12 +262,12 @@ class UptimeBot(ttk.Frame):
         fail_row = procesar_fn(csv_path)
 
         if csv_path and not fail_row:
-            msg = f"[INFO] No se encontraron filas con FAIL/NG en '{csv_path}' (módulo: {self.selected_type})."
+            msg = f"[INFO] No se encontraron filas con FAIL/NG en '{csv_path}' (módulo: {mod_name})."
             print(msg)
             self.history_log.insert("end", msg + "\n")
             return
 
-        # Si existe fail_row, leemos el archivo para mostrar su contenido
+        # Leer archivo para mostrar su contenido
         try:
             with open(csv_path, "r", encoding="utf-8") as f:
                 file_content = f.readlines()
@@ -315,7 +291,7 @@ class UptimeBot(ttk.Frame):
 
         self.table_records.insert(0, new_record)
         self._rebuild_table()
-        self.buscar_historial()
+        self.buscar_historial(mod_name)
 
     def _rebuild_table(self):
         """Recrea la tabla de seguimientos (history_table) con self.table_records."""
@@ -336,7 +312,7 @@ class UptimeBot(ttk.Frame):
             except (ValueError, IndexError) as e:
                 print(f"[ERROR] Al recuperar el log del registro: {e}")
 
-    def buscar_historial(self):
+    def buscar_historial(self, mod_name):
         """Busca en el historial usando la función del módulo seleccionado."""
         if not self.directorio:
             print("[ERROR] No se ha seleccionado un directorio para historial.")
@@ -347,9 +323,9 @@ class UptimeBot(ttk.Frame):
             print("[WARN] Ingrese un código para buscar en el historial.")
             return
 
-        info_modulo = MODULES_INFO.get(self.selected_type)
+        info_modulo = MODULES_INFO.get(mod_name)
         if not info_modulo:
-            print(f"[ERROR] No hay información de módulo para {self.selected_type}")
+            print(f"[ERROR] No hay información de módulo para {mod_name}")
             return
 
         historial_fn = info_modulo["historial"]
@@ -379,20 +355,18 @@ class UptimeBot(ttk.Frame):
     def ordenar_por_fecha(self):
         """Alterna el orden de clasificación (asc/desc) y vuelve a cargar el historial."""
         self.sort_descending = not self.sort_descending
-        self.buscar_historial()
+        current_mod = self.combo_modulos.get()
+        if current_mod:
+            self.buscar_historial(current_mod)
 
     def clear_screen(self):
         """Limpia el log, el Treeview del historial y la tabla de seguimientos."""
         if messagebox.askyesno("Confirmar", "¿Está seguro de que desea limpiar la pantalla?"):
-            # Limpiar el widget del log
             self.history_log.delete("1.0", tk.END)
-            # Limpiar el Treeview del historial
             for item in self.history_tree.get_children():
                 self.history_tree.delete(item)
-            # Limpiar la tabla de seguimientos (Treeview derecho)
             for item in self.history_table.get_children():
                 self.history_table.delete(item)
-            # Limpiar los registros almacenados
             self.table_records.clear()
 
     def download_csv(self):
@@ -421,115 +395,226 @@ class UptimeBot(ttk.Frame):
             print(err_msg)
             self.history_log.insert("end", err_msg + "\n")
 
+    # ---------------------------------------
+    #   MÉTODOS DE LECTURA/ESCRITURA DE CFG
+    # ---------------------------------------
+    def write_settings(self, file_path, settings_dict):
+        """
+        Escribe el diccionario `settings_dict` en el archivo `file_path`
+        usando un formato compatible con read_setting().
+        """
+        try:
+            with open(file_path, 'w', encoding='utf-8') as f:
+                for key, value in settings_dict.items():
+                    # Si el valor es lista, re-convertimos a "elem1, elem2, elem3"
+                    if isinstance(value, list):
+                        value = ", ".join(value)
+                    f.write(f"{key}={value}\n")
+        except Exception as e:
+            print(f"[ERROR] Al escribir configuración: {e}")
+
+    def reload_modules_info(self):
+        """
+        Relee el archivo Parametros.cfg, reconstruye el diccionario MODULES_INFO
+        y actualiza el combobox de módulos para reflejar los cambios sin reiniciar la app.
+        """
+        new_settings = read_setting(cfg_file)
+
+        # Si "Modulos" es string => lo convertimos a lista. Si ya es lista => la usamos tal cual.
+        if isinstance(new_settings.get("Modulos", []), str):
+            new_module_list = [m.strip() for m in new_settings["Modulos"].split(",") if m.strip()]
+        else:
+            new_module_list = new_settings.get("Modulos", [])
+
+        new_modules_info = {}
+        for mod_name in new_module_list:
+            cfg_key = f"Directorio_{mod_name}"
+            mod_path = new_settings.get(cfg_key)
+            if not mod_path:
+                print(f"[WARN] No se encontró la ruta para '{mod_name}'. Saltando.")
+                continue
+
+            try:
+                module_ref = importlib.import_module(f"Modulos.{mod_name}.Funciones")
+                buscar_fn = getattr(module_ref, f"buscar_archivo_{mod_name.lower()}")
+                procesar_fn = getattr(module_ref, f"procesar_archivo_{mod_name.lower()}")
+                historial_fn = getattr(module_ref, f"rutaHistorial_archivo_{mod_name.lower()}")
+                new_modules_info[mod_name] = {
+                    "path": mod_path,
+                    "buscar": buscar_fn,
+                    "procesar": procesar_fn,
+                    "historial": historial_fn
+                }
+            except ImportError as e:
+                print(f"[ERROR] No se pudo importar el módulo {mod_name}: {e}")
+            except AttributeError as e:
+                print(f"[ERROR] Función faltante en {mod_name}: {e}")
+
+        # Actualizamos MODULES_INFO (global o de clase)
+        MODULES_INFO.clear()
+        MODULES_INFO.update(new_modules_info)
+
+        # Refrescamos la lista de valores en el ComboBox
+        self.combo_modulos["values"] = list(MODULES_INFO.keys())
+
+        # Si el que estaba seleccionado ya no existe, limpiamos el combobox
+        if self.combo_modulos.get() not in MODULES_INFO:
+            self.combo_modulos.set("")
+
     # ----------------------------------------------------------------
-    #   MÉTODOS PARA ADMIN WINDOW
+    #   MÉTODOS DE ADMINISTRACIÓN DE MÓDULOS
     # ----------------------------------------------------------------
-    def show_admin_window(self):
-        """Abre una ventana Toplevel con checkbuttons y rutas de cada módulo."""
-        if self.admin_window and tk.Toplevel.winfo_exists(self.admin_window):
-            # Si la ventana ya está abierta, solo traerla al frente
-            self.admin_window.lift()
+    def on_change_path(self):
+        """Abre un filedialog para cambiar la ruta del módulo seleccionado y reescribe Parametros.cfg."""
+        mod_name = self.combo_modulos.get().strip()
+        if not mod_name:
+            messagebox.showwarning("Módulo no seleccionado", "Seleccione un módulo para cambiar su ruta.")
             return
 
-        self.admin_window = tk.Toplevel(self.master)
-        self.admin_window.title("Administración de Módulos")
-        self.admin_window.geometry("600x300")
+        new_path = filedialog.askdirectory(title=f"Seleccionar nueva ruta para {mod_name}")
+        if not new_path:
+            return  # usuario canceló
 
-        # Creamos un frame dentro de la Toplevel
-        admin_frame = ttk.Frame(self.admin_window)
-        admin_frame.pack(fill="both", expand=True, padx=10, pady=10)
+        settings = read_setting(cfg_file)
+        settings[f"Directorio_{mod_name}"] = new_path
+        self.write_settings(cfg_file, settings)
 
-        # Título
-        ttk.Label(
-            admin_frame,
-            text="Habilitar/Deshabilitar Módulos y Modificar Rutas",
-            font=("Montserrat", 14, "bold")
-        ).grid(row=0, column=0, columnspan=3, sticky="w", pady=5)
+        # Preguntamos si queremos recargar la configuración
+        if messagebox.askyesno(
+            "Ruta actualizada",
+            f"Se actualizó la ruta de {mod_name} a:\n{new_path}\n\n¿Desea recargar la configuración actual?"
+        ):
+            self.reload_modules_info()
 
-        self.modules_vars = {}
-        row_index = 1
+    def on_remove_module(self):
+        """Elimina el módulo seleccionado de Parametros.cfg y reescribe."""
+        mod_name = self.combo_modulos.get().strip()
+        if not mod_name:
+            messagebox.showwarning("Módulo no seleccionado", "Seleccione un módulo para eliminar.")
+            return
 
-        # Creación dinámica de checkbuttons y labels/rutas
-        for module_name, mod_info in MODULES_INFO.items():
-            var = tk.BooleanVar(value=mod_info.get("enabled", True))
-            self.modules_vars[module_name] = var
+        if not messagebox.askyesno("Confirmar", f"¿Seguro que desea eliminar el módulo '{mod_name}'?"):
+            return
 
-            cb = ttk.Checkbutton(admin_frame, text=module_name, variable=var)
-            cb.grid(row=row_index, column=0, sticky="w", pady=2)
-
-            # Etiqueta con la ruta actual
-            ruta_label = ttk.Label(admin_frame, text=mod_info["path"], width=40)
-            ruta_label.grid(row=row_index, column=1, sticky="w", pady=2)
-
-            # Botón "Seleccionar Ruta"
-            def make_callback(m=module_name, lab=ruta_label):
-                return lambda: self.on_select_path(m, lab)
-
-            sel_btn = ttk.Button(
-                admin_frame,
-                text="Seleccionar Ruta",
-                command=make_callback()
-            )
-            sel_btn.grid(row=row_index, column=2, padx=5)
-            row_index += 1
-
-        # Botón "Guardar Cambios"
-        save_btn = ttk.Button(admin_frame, text="Guardar Cambios", command=self.save_config)
-        save_btn.grid(row=row_index, column=0, columnspan=3, pady=10)
-
-    def on_select_path(self, module_name, ruta_label):
-        """Abre un filedialog para seleccionar una carpeta y actualiza la ruta en MODULES_INFO."""
-        new_dir = filedialog.askdirectory(title=f"Seleccionar ruta para {module_name}")
-        if new_dir:
-            MODULES_INFO[module_name]["path"] = new_dir
-            ruta_label.config(text=new_dir)
-            print(f"[INFO] Ruta actualizada para {module_name}: {new_dir}")
-
-    def save_config(self):
-        """
-        Guarda los cambios en Parametros.cfg:
-          - Activa/desactiva módulos según los checkbuttons
-          - Actualiza la ruta si se cambió
-        """
-        # Leemos el archivo actual
         settings = read_setting(cfg_file)
 
-        # Reconstruimos la lista "Modulos" y guardamos enabled/rutas
-        module_list = []
-        for mod_name, mod_info in MODULES_INFO.items():
-            # Estado (enabled/disabled) a partir de los checkbuttons
-            new_state = self.modules_vars[mod_name].get()
-            mod_info["enabled"] = new_state
-            settings[f"{mod_name}_enabled"] = "True" if new_state else "False"
+        # Aseguramos que "Modulos" sea lista
+        mod_value = settings.get("Modulos", [])
+        if isinstance(mod_value, str):
+            modulos_list = [m.strip() for m in mod_value.split(",") if m.strip()]
+        else:
+            modulos_list = mod_value
 
-            # Ruta
-            settings[f"Directorio_{mod_name}"] = mod_info["path"]
+        # Eliminamos el nombre del módulo si existe
+        if mod_name in modulos_list:
+            modulos_list.remove(mod_name)
 
-            # Si quieres que "Modulos" contenga todos:
-            module_list.append(mod_name)
-            # O solo los que están habilitados:
-            # if new_state:
-            #     module_list.append(mod_name)
+        # Guardamos el cambio
+        settings["Modulos"] = modulos_list
 
-        settings["Modulos"] = ", ".join(module_list)
+        # Borramos las entradas Directorio_<mod_name>, <mod_name>_enabled
+        if f"Directorio_{mod_name}" in settings:
+            del settings[f"Directorio_{mod_name}"]
+        if f"{mod_name}_enabled" in settings:
+            del settings[f"{mod_name}_enabled"]
 
         self.write_settings(cfg_file, settings)
 
-        messagebox.showinfo(
-            "Guardar Cambios",
-            "Configuración guardada exitosamente.\n(Reinicia la app para ver los cambios)."
-        )
+        # Pregunta si queremos recargar
+        if messagebox.askyesno(
+            "Módulo eliminado",
+            f"Se ha eliminado '{mod_name}' de la configuración.\n\n¿Desea recargar la configuración actual?"
+        ):
+            self.reload_modules_info()
 
-    def write_settings(self, file_path, settings_dict):
-        """
-        Reescribe Parametros.cfg con base en un diccionario.
-        ¡PERDERÁS comentarios u orden original!
-        """
-        with open(file_path, "w", encoding="utf-8") as f:
-            for k, v in settings_dict.items():
-                if isinstance(v, list):
-                    v = ", ".join(v)
-                f.write(f"{k} = {v}\n")
+    def on_add_module(self):
+        """Abre una ventana Toplevel para ingresar un nuevo módulo, su ruta y el directorio de seguimiento."""
+        add_win = tk.Toplevel(self)
+        add_win.title("Agregar Módulo")
+
+        # Campo: Nombre del Módulo
+        ttk.Label(add_win, text="Nombre del Módulo:").grid(row=0, column=0, padx=5, pady=5, sticky="e")
+        mod_name_var = tk.StringVar()
+        ttk.Entry(add_win, textvariable=mod_name_var).grid(row=0, column=1, padx=5, pady=5)
+
+        # Campo: Ruta del Módulo (debe contener Funciones.py)
+        ttk.Label(add_win, text="Ruta del Módulo:").grid(row=1, column=0, padx=5, pady=5, sticky="e")
+        mod_path_var = tk.StringVar()
+        ttk.Entry(add_win, textvariable=mod_path_var, width=40).grid(row=1, column=1, padx=5, pady=5)
+        
+        def browse_mod_path():
+            chosen = filedialog.askdirectory(title="Seleccionar carpeta del módulo (debe contener Funciones.py)")
+            if chosen:
+                mod_path_var.set(chosen)
+        ttk.Button(add_win, text="Examinar", command=browse_mod_path).grid(row=1, column=2, padx=5, pady=5)
+
+        # Campo: Directorio de Seguimiento (ruta para los CSV u otros archivos)
+        ttk.Label(add_win, text="Directorio de Seguimiento:").grid(row=2, column=0, padx=5, pady=5, sticky="e")
+        tracking_dir_var = tk.StringVar()
+        ttk.Entry(add_win, textvariable=tracking_dir_var, width=40).grid(row=2, column=1, padx=5, pady=5)
+        
+        def browse_tracking_dir():
+            chosen = filedialog.askdirectory(title="Seleccionar directorio de seguimiento (CSV)")
+            if chosen:
+                tracking_dir_var.set(chosen)
+        ttk.Button(add_win, text="Examinar", command=browse_tracking_dir).grid(row=2, column=2, padx=5, pady=5)
+
+        def confirm_add():
+            new_name = mod_name_var.get().strip()
+            new_mod_path = mod_path_var.get().strip()
+            new_tracking_dir = tracking_dir_var.get().strip()
+
+            if not new_name or not new_mod_path or not new_tracking_dir:
+                messagebox.showwarning("Faltan datos", "Ingrese un nombre, la ruta del módulo y el directorio de seguimiento válidos.")
+                return
+
+            # Verificar que en la ruta del módulo exista 'Funciones.py'
+            funciones_path = os.path.join(new_mod_path, "Funciones.py")
+            if not os.path.exists(funciones_path):
+                messagebox.showerror("Error", f"No se encontró 'Funciones.py' en la ruta del módulo:\n{new_mod_path}")
+                return
+
+            # Opcional: Verificar que el nombre del módulo coincida con el nombre de la carpeta seleccionada
+            if os.path.basename(new_mod_path) != new_name:
+                messagebox.showwarning("Advertencia", "El nombre del módulo no coincide con el nombre de la carpeta seleccionada.")
+                # Puedes decidir si forzar la corrección o permitir continuar.
+
+            # Leer la configuración actual
+            settings = read_setting(cfg_file)
+
+            # Asegurarse de que "Modulos" se maneje como lista
+            mod_value = settings.get("Modulos", [])
+            if isinstance(mod_value, str):
+                modulos_list = [m.strip() for m in mod_value.split(",") if m.strip()]
+            else:
+                modulos_list = mod_value
+
+            if new_name in modulos_list:
+                messagebox.showerror("Error", f"El módulo '{new_name}' ya existe.")
+                return
+
+            # Agregar el módulo a la lista
+            modulos_list.append(new_name)
+            settings["Modulos"] = modulos_list
+
+            # Guardar el directorio de seguimiento en 'Directorio_<módulo>'
+            settings[f"Directorio_{new_name}"] = new_tracking_dir
+            # Si deseas, puedes guardar también la ruta del módulo en una clave separada:
+            settings[f"RutaModulo_{new_name}"] = new_mod_path
+            settings[f"{new_name}_enabled"] = "True"
+
+            # Escribir los cambios en Parametros.cfg
+            self.write_settings(cfg_file, settings)
+
+            if messagebox.askyesno(
+                "Módulo agregado",
+                f"Se ha agregado el módulo '{new_name}'\nRuta del módulo: {new_mod_path}\nDirectorio de seguimiento: {new_tracking_dir}\n\n¿Desea recargar la configuración actual?"
+            ):
+                self.reload_modules_info()
+
+            add_win.destroy()
+
+        ttk.Button(add_win, text="Agregar", command=confirm_add).grid(row=3, column=0, columnspan=3, pady=10)
 
 
 def main():
@@ -537,20 +622,13 @@ def main():
     root.title("CLARE by [Testing UNAE]")
     root.geometry("1280x720")
 
-    # Fondo principal blanco
     root.configure(bg="#FFFFFF")
 
-    # Estilos con ttk y usar el tema 'clam' para mayor personalización
     style = ttk.Style()
     style.theme_use("clam")
 
-    # Fondo blanco para todos los frames
     style.configure("TFrame", background="#FFFFFF")
-
-    # Estilo general para labels
     style.configure("TLabel", background="#FFFFFF", foreground="#000000", font=("Chakra Petch", 12))
-
-    # Estilo para botones
     style.configure("TButton", font=("Montserrat", 12, "bold"), background="#141736", foreground="#FFFFFF")
     style.map("TButton",
               background=[("active", "#0040FF")],
