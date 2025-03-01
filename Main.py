@@ -8,8 +8,9 @@ import sys
 from tkinter import filedialog, messagebox
 from PIL import Image, ImageTk
 import importlib
-
-from Process import MODULES_INFO, cfg_file, read_setting
+from Process import read_setting, cfg_file, write_settings_in_process, normalize_drive_letter
+import importlib
+from Process import MODULES_INFO, cfg_file, read_setting, write_settings_in_process, agregar_modulos_gui
 
 class UptimeBot(ttk.Frame):
     def __init__(self, master=None, **kwargs):
@@ -406,7 +407,6 @@ class UptimeBot(ttk.Frame):
         try:
             with open(file_path, 'w', encoding='utf-8') as f:
                 for key, value in settings_dict.items():
-                    # Si el valor es lista, re-convertimos a "elem1, elem2, elem3"
                     if isinstance(value, list):
                         value = ", ".join(value)
                     f.write(f"{key}={value}\n")
@@ -420,19 +420,33 @@ class UptimeBot(ttk.Frame):
         """
         new_settings = read_setting(cfg_file)
 
-        # Si "Modulos" es string => lo convertimos a lista. Si ya es lista => la usamos tal cual.
         if isinstance(new_settings.get("Modulos", []), str):
             new_module_list = [m.strip() for m in new_settings["Modulos"].split(",") if m.strip()]
         else:
             new_module_list = new_settings.get("Modulos", [])
 
         new_modules_info = {}
+        project_dir = os.path.dirname(os.path.abspath(sys.argv[0]))
         for mod_name in new_module_list:
+            # Obtener ruta desde "Directorio_" o "RutaModulo_"
             cfg_key = f"Directorio_{mod_name}"
-            mod_path = new_settings.get(cfg_key)
+            mod_path = str(new_settings.get(cfg_key, "")).strip()
+            mod_path = normalize_drive_letter(mod_path)
             if not mod_path:
-                print(f"[WARN] No se encontró la ruta para '{mod_name}'. Saltando.")
-                continue
+                ruta_key = f"RutaModulo_{mod_name}"
+                mod_path = str(new_settings.get(ruta_key, "")).strip()
+                mod_path = normalize_drive_letter(mod_path)
+                if not mod_path:
+                    default_path = os.path.join(project_dir, "Modulos", mod_name)
+                    mod_path = default_path
+                    if os.path.exists(default_path):
+                        print(f"[INFO] Se usó la ruta por defecto para el módulo '{mod_name}': {mod_path}")
+                    else:
+                        print(f"[WARN] No se encontró la ruta para '{mod_name}', se asignará ruta por defecto: {mod_path}")
+
+            # Leer el flag de habilitación del módulo
+            enabled_value = new_settings.get(f"{mod_name}_enabled", "True").strip().lower()
+            enabled_bool = False if enabled_value in ("false", "0", "no") else True
 
             try:
                 module_ref = importlib.import_module(f"Modulos.{mod_name}.Funciones")
@@ -443,21 +457,23 @@ class UptimeBot(ttk.Frame):
                     "path": mod_path,
                     "buscar": buscar_fn,
                     "procesar": procesar_fn,
-                    "historial": historial_fn
+                    "historial": historial_fn,
+                    "enabled": enabled_bool
                 }
-            except ImportError as e:
-                print(f"[ERROR] No se pudo importar el módulo {mod_name}: {e}")
-            except AttributeError as e:
-                print(f"[ERROR] Función faltante en {mod_name}: {e}")
+            except Exception as e:
+                print(f"[ERROR] Error al cargar el módulo {mod_name}: {e}")
+                new_modules_info[mod_name] = {
+                    "path": mod_path,
+                    "buscar": None,
+                    "procesar": None,
+                    "historial": None,
+                    "enabled": enabled_bool
+                }
 
-        # Actualizamos MODULES_INFO (global o de clase)
         MODULES_INFO.clear()
         MODULES_INFO.update(new_modules_info)
 
-        # Refrescamos la lista de valores en el ComboBox
-        self.combo_modulos["values"] = list(MODULES_INFO.keys())
-
-        # Si el que estaba seleccionado ya no existe, limpiamos el combobox
+        self.combo_modulos["values"] = [m for m, info in MODULES_INFO.items() if info.get("enabled", True)]
         if self.combo_modulos.get() not in MODULES_INFO:
             self.combo_modulos.set("")
 
@@ -473,13 +489,12 @@ class UptimeBot(ttk.Frame):
 
         new_path = filedialog.askdirectory(title=f"Seleccionar nueva ruta para {mod_name}")
         if not new_path:
-            return  # usuario canceló
+            return
 
         settings = read_setting(cfg_file)
         settings[f"Directorio_{mod_name}"] = new_path
         self.write_settings(cfg_file, settings)
 
-        # Preguntamos si queremos recargar la configuración
         if messagebox.askyesno(
             "Ruta actualizada",
             f"Se actualizó la ruta de {mod_name} a:\n{new_path}\n\n¿Desea recargar la configuración actual?"
@@ -487,146 +502,89 @@ class UptimeBot(ttk.Frame):
             self.reload_modules_info()
 
     def on_remove_module(self):
-        """Elimina el módulo seleccionado de Parametros.cfg y reescribe."""
-        mod_name = self.combo_modulos.get().strip()
-        if not mod_name:
-            messagebox.showwarning("Módulo no seleccionado", "Seleccione un módulo para eliminar.")
-            return
-
-        if not messagebox.askyesno("Confirmar", f"¿Seguro que desea eliminar el módulo '{mod_name}'?"):
-            return
-
-        settings = read_setting(cfg_file)
-
-        # Aseguramos que "Modulos" sea lista
-        mod_value = settings.get("Modulos", [])
+        """
+        Muestra una ventana para gestionar los módulos: se pueden habilitar/deshabilitar o eliminar.
+        """
+        top = tk.Toplevel(self)
+        top.title("Gestionar Módulos")
+        top.geometry("500x300")
+        
+        config = read_setting(cfg_file)
+        mod_value = config.get("Modulos", [])
         if isinstance(mod_value, str):
-            modulos_list = [m.strip() for m in mod_value.split(",") if m.strip()]
+            modulos_config = [m.strip() for m in mod_value.split(",") if m.strip()]
         else:
-            modulos_list = mod_value
+            modulos_config = mod_value
 
-        # Eliminamos el nombre del módulo si existe
-        if mod_name in modulos_list:
-            modulos_list.remove(mod_name)
+        if not modulos_config:
+            messagebox.showinfo("Información", "No hay módulos configurados.")
+            top.destroy()
+            return
 
-        # Guardamos el cambio
-        settings["Modulos"] = modulos_list
+        # Encabezados de columnas
+        ttk.Label(top, text="Módulo", font=("Montserrat", 10, "bold")).grid(row=0, column=0, padx=5, pady=5)
+        ttk.Label(top, text="Habilitado", font=("Montserrat", 10, "bold")).grid(row=0, column=1, padx=5, pady=5)
+        ttk.Label(top, text="Eliminar", font=("Montserrat", 10, "bold")).grid(row=0, column=2, padx=5, pady=5)
+        ttk.Label(top, text="Estado Actual", font=("Montserrat", 10, "bold")).grid(row=0, column=3, padx=5, pady=5)
 
-        # Borramos las entradas Directorio_<mod_name>, <mod_name>_enabled
-        if f"Directorio_{mod_name}" in settings:
-            del settings[f"Directorio_{mod_name}"]
-        if f"{mod_name}_enabled" in settings:
-            del settings[f"{mod_name}_enabled"]
+        enable_vars = {}
+        remove_vars = {}
+        for idx, mod in enumerate(modulos_config, start=1):
+            ttk.Label(top, text=mod).grid(row=idx, column=0, padx=5, pady=2, sticky="w")
+            # Se obtiene el estado actual del módulo (True si está habilitado)
+            current_enabled = config.get(f"{mod}_enabled", "True")
+            default_val = True
+            if current_enabled.strip().lower() in ("false", "0", "no"):
+                default_val = False
+            enable_var = tk.BooleanVar(value=default_val)
+            enable_chk = tk.Checkbutton(top, text="", variable=enable_var)
+            enable_chk.grid(row=idx, column=1, padx=5, pady=2)
+            enable_vars[mod] = enable_var
 
-        self.write_settings(cfg_file, settings)
+            remove_var = tk.BooleanVar()
+            remove_chk = tk.Checkbutton(top, text="", variable=remove_var)
+            remove_chk.grid(row=idx, column=2, padx=5, pady=2)
+            remove_vars[mod] = remove_var
 
-        # Pregunta si queremos recargar
-        if messagebox.askyesno(
-            "Módulo eliminado",
-            f"Se ha eliminado '{mod_name}' de la configuración.\n\n¿Desea recargar la configuración actual?"
-        ):
+            ttk.Label(top, text=current_enabled).grid(row=idx, column=3, padx=5, pady=2, sticky="w")
+
+        def confirmar():
+            for mod in modulos_config[:]:
+                # Si se selecciona eliminar, se remueve el módulo de la configuración
+                if remove_vars[mod].get():
+                    modulos_config.remove(mod)
+                    directorio_key = f"Directorio_{mod}"
+                    if directorio_key in config:
+                        del config[directorio_key]
+                    enabled_key = f"{mod}_enabled"
+                    if enabled_key in config:
+                        del config[enabled_key]
+                else:
+                    # Actualiza el flag del módulo según el checkbutton
+                    config[f"{mod}_enabled"] = "True" if enable_vars[mod].get() else "False"
+            config["Modulos"] = modulos_config
+            write_settings_in_process(cfg_file, config)
+            messagebox.showinfo("Información", "La configuración se actualizó correctamente.")
+            top.destroy()
             self.reload_modules_info()
 
+        ttk.Button(top, text="Aplicar cambios", command=confirmar).grid(row=len(modulos_config)+1, column=0, columnspan=4, pady=10)
+
     def on_add_module(self):
-        """Abre una ventana Toplevel para ingresar un nuevo módulo, su ruta y el directorio de seguimiento."""
-        add_win = tk.Toplevel(self)
-        add_win.title("Agregar Módulo")
-
-        # Campo: Nombre del Módulo
-        ttk.Label(add_win, text="Nombre del Módulo:").grid(row=0, column=0, padx=5, pady=5, sticky="e")
-        mod_name_var = tk.StringVar()
-        ttk.Entry(add_win, textvariable=mod_name_var).grid(row=0, column=1, padx=5, pady=5)
-
-        # Campo: Ruta del Módulo (debe contener Funciones.py)
-        ttk.Label(add_win, text="Ruta del Módulo:").grid(row=1, column=0, padx=5, pady=5, sticky="e")
-        mod_path_var = tk.StringVar()
-        ttk.Entry(add_win, textvariable=mod_path_var, width=40).grid(row=1, column=1, padx=5, pady=5)
-        
-        def browse_mod_path():
-            chosen = filedialog.askdirectory(title="Seleccionar carpeta del módulo (debe contener Funciones.py)")
-            if chosen:
-                mod_path_var.set(chosen)
-        ttk.Button(add_win, text="Examinar", command=browse_mod_path).grid(row=1, column=2, padx=5, pady=5)
-
-        # Campo: Directorio de Seguimiento (ruta para los CSV u otros archivos)
-        ttk.Label(add_win, text="Directorio de Seguimiento:").grid(row=2, column=0, padx=5, pady=5, sticky="e")
-        tracking_dir_var = tk.StringVar()
-        ttk.Entry(add_win, textvariable=tracking_dir_var, width=40).grid(row=2, column=1, padx=5, pady=5)
-        
-        def browse_tracking_dir():
-            chosen = filedialog.askdirectory(title="Seleccionar directorio de seguimiento (CSV)")
-            if chosen:
-                tracking_dir_var.set(chosen)
-        ttk.Button(add_win, text="Examinar", command=browse_tracking_dir).grid(row=2, column=2, padx=5, pady=5)
-
-        def confirm_add():
-            new_name = mod_name_var.get().strip()
-            new_mod_path = mod_path_var.get().strip()
-            new_tracking_dir = tracking_dir_var.get().strip()
-
-            if not new_name or not new_mod_path or not new_tracking_dir:
-                messagebox.showwarning("Faltan datos", "Ingrese un nombre, la ruta del módulo y el directorio de seguimiento válidos.")
-                return
-
-            # Verificar que en la ruta del módulo exista 'Funciones.py'
-            funciones_path = os.path.join(new_mod_path, "Funciones.py")
-            if not os.path.exists(funciones_path):
-                messagebox.showerror("Error", f"No se encontró 'Funciones.py' en la ruta del módulo:\n{new_mod_path}")
-                return
-
-            # Opcional: Verificar que el nombre del módulo coincida con el nombre de la carpeta seleccionada
-            if os.path.basename(new_mod_path) != new_name:
-                messagebox.showwarning("Advertencia", "El nombre del módulo no coincide con el nombre de la carpeta seleccionada.")
-                # Puedes decidir si forzar la corrección o permitir continuar.
-
-            # Leer la configuración actual
-            settings = read_setting(cfg_file)
-
-            # Asegurarse de que "Modulos" se maneje como lista
-            mod_value = settings.get("Modulos", [])
-            if isinstance(mod_value, str):
-                modulos_list = [m.strip() for m in mod_value.split(",") if m.strip()]
-            else:
-                modulos_list = mod_value
-
-            if new_name in modulos_list:
-                messagebox.showerror("Error", f"El módulo '{new_name}' ya existe.")
-                return
-
-            # Agregar el módulo a la lista
-            modulos_list.append(new_name)
-            settings["Modulos"] = modulos_list
-
-            # Guardar el directorio de seguimiento en 'Directorio_<módulo>'
-            settings[f"Directorio_{new_name}"] = new_tracking_dir
-            # Si deseas, puedes guardar también la ruta del módulo en una clave separada:
-            settings[f"RutaModulo_{new_name}"] = new_mod_path
-            settings[f"{new_name}_enabled"] = "True"
-
-            # Escribir los cambios en Parametros.cfg
-            self.write_settings(cfg_file, settings)
-
-            if messagebox.askyesno(
-                "Módulo agregado",
-                f"Se ha agregado el módulo '{new_name}'\nRuta del módulo: {new_mod_path}\nDirectorio de seguimiento: {new_tracking_dir}\n\n¿Desea recargar la configuración actual?"
-            ):
-                self.reload_modules_info()
-
-            add_win.destroy()
-
-        ttk.Button(add_win, text="Agregar", command=confirm_add).grid(row=3, column=0, columnspan=3, pady=10)
-
+        """
+        Llama a la función de agregar módulos definida en Process.py y actualiza la configuración.
+        """
+        agregar_modulos_gui(self, cfg_file)
+        self.reload_modules_info()
 
 def main():
     root = tk.Tk()
     root.title("CLARE by [Testing UNAE]")
     root.geometry("1280x720")
-
     root.configure(bg="#FFFFFF")
 
     style = ttk.Style()
     style.theme_use("clam")
-
     style.configure("TFrame", background="#FFFFFF")
     style.configure("TLabel", background="#FFFFFF", foreground="#000000", font=("Chakra Petch", 12))
     style.configure("TButton", font=("Montserrat", 12, "bold"), background="#141736", foreground="#FFFFFF")
