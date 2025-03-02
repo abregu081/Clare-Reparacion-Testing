@@ -117,18 +117,26 @@ else:
 project_dir = os.path.dirname(os.path.abspath(sys.argv[0]))
 modules_info = {}
 for mod_name in module_list:
+    # Obtener ruta desde "Directorio_" o "RutaModulo_"
     cfg_key = f"Directorio_{mod_name}"
     mod_path = str(setting.get(cfg_key, "")).strip()
-    # Normalizamos la ruta (forzando la letra de la unidad a mayúscula)
     mod_path = normalize_drive_letter(mod_path)
     if not mod_path:
-        # Si no hay ruta configurada, se asigna la ruta por defecto
-        default_path = os.path.join(project_dir, "Modulos", mod_name)
-        mod_path = default_path
-        if os.path.exists(default_path):
-            print(f"[INFO] Se usó la ruta por defecto para el módulo '{mod_name}': {mod_path}")
-        else:
-            print(f"[WARN] No se encontró la ruta para el módulo '{mod_name}', se asignará ruta por defecto: {mod_path}")
+        ruta_key = f"RutaModulo_{mod_name}"
+        mod_path = str(setting.get(ruta_key, "")).strip()
+        mod_path = normalize_drive_letter(mod_path)
+        if not mod_path:
+            default_path = os.path.join(project_dir, "Modulos", mod_name)
+            mod_path = default_path
+            if os.path.exists(default_path):
+                print(f"[INFO] Se usó la ruta por defecto para el módulo '{mod_name}': {mod_path}")
+            else:
+                print(f"[WARN] No se encontró la ruta para el módulo '{mod_name}', se asignará ruta por defecto: {mod_path}")
+
+    # Leer y convertir la bandera de habilitación del módulo
+    enabled_value = setting.get(f"{mod_name}_enabled", "True").strip().lower()
+    enabled_bool = False if enabled_value in ("false", "0", "no") else True
+
     try:
         module_ref = importlib.import_module(f"Modulos.{mod_name}.Funciones")
         buscar_fn = getattr(module_ref, f"buscar_archivo_{mod_name.lower()}")
@@ -139,17 +147,16 @@ for mod_name in module_list:
             "buscar": buscar_fn,
             "procesar": procesar_fn,
             "historial": historial_fn,
-            "enabled": True
+            "enabled": enabled_bool
         }
     except Exception as e:
         print(f"[ERROR] Error al cargar el módulo {mod_name}: {e}")
-        # Se agrega el módulo aunque falle la importación para que aparezca en el combobox
         modules_info[mod_name] = {
             "path": mod_path,
             "buscar": None,
             "procesar": None,
             "historial": None,
-            "enabled": True
+            "enabled": enabled_bool
         }
 
 MODULES_INFO = modules_info

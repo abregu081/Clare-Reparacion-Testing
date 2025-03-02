@@ -63,51 +63,61 @@ def rutaHistorial_archivo_segurity(codigo, directorio):
       - hostname
       - status (FAIL o PASS)
       - file_path
-      - date_str (formado como "20" + carpeta_fecha)
-      - time_str (se deja vacío o se extrae de algún dato adicional si se requiere)
+      - date_str (YYYY-MM-DD) (se arma a partir de la carpeta_fecha)
+      - time_str (se obtiene de la primera fila de datos, columna "START TIME")
     """
     resultado_busqueda = []
     
-    # Recorremos cada carpeta en el directorio raíz (hostname)
     for hostname in os.listdir(directorio):
         hostname_path = os.path.join(directorio, hostname)
         if not os.path.isdir(hostname_path):
             continue
         
-        # Dentro de cada hostname se espera una carpeta de estación (ej: STLA_R28.03)
         for station in os.listdir(hostname_path):
             station_path = os.path.join(hostname_path, station)
             if not os.path.isdir(station_path):
                 continue
             
-            # Se recorren las carpetas de fecha (debe ser numérica y de 6 dígitos)
             for carpeta_fecha in os.listdir(station_path):
                 fecha_path = os.path.join(station_path, carpeta_fecha)
+                # Verifica que la carpeta sea de 6 dígitos (ej: '230226')
                 if not (os.path.isdir(fecha_path) and carpeta_fecha.isdigit() and len(carpeta_fecha) == 6):
                     continue
                 
-                # Podemos formar una cadena de fecha; por ejemplo, "20" + carpeta_fecha
-                date_str = "20" + carpeta_fecha  
+                # Construye la fecha en formato YYYY-MM-DD
+                date_str = "20" + carpeta_fecha  # => '20230226' p.ej.
+                date_str = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:]}"  # => '2023-02-26'
                 
-                # Revisamos ambos estados: FAIL y PASS
                 for estado in ["FAIL", "PASS"]:
                     carpeta_estado = os.path.join(fecha_path, estado)
                     if not os.path.exists(carpeta_estado):
                         continue
                     
-                    # Dentro de carpeta_estado se encuentran subcarpetas
                     for subcarpeta in os.listdir(carpeta_estado):
                         subcarpeta_path = os.path.join(carpeta_estado, subcarpeta)
                         if not os.path.isdir(subcarpeta_path):
                             continue
                         
-                        # Iteramos sobre los archivos dentro de la subcarpeta
                         for archivo in os.listdir(subcarpeta_path):
                             if archivo.lower().endswith(".csv") and codigo in archivo:
                                 file_path = os.path.join(subcarpeta_path, archivo)
-                                # Si se requiere extraer la hora u otros datos, se podría llamar a una función adicional;
-                                # por ahora, dejamos time_str vacío.
+                                
+                                # Inicializamos time_str como vacío
                                 time_str = ""
+                                try:
+                                    with open(file_path, "r", newline="", encoding="utf-8") as f:
+                                        csv_reader = csv.reader(f)
+                                        header = next(csv_reader, None)  # Omitimos la cabecera
+                                        
+                                        # Tomamos la PRIMERA fila de datos
+                                        first_row = next(csv_reader, None)  # <-- aquí leemos la primera fila real
+                                        if first_row and len(first_row) > 7:
+                                            # Supongamos que la columna "START TIME" es la 8ª (índice 7)
+                                            time_str = first_row[7]  # <-- extraemos el valor
+                                
+                                except Exception as e:
+                                    print(f"Error leyendo el archivo {file_path}: {e}")
+                                
                                 resultado_busqueda.append({
                                     "hostname": hostname,
                                     "status": estado,

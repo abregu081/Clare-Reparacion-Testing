@@ -10,7 +10,7 @@ def extraer_fecha_y_hora(folder_name, file_name):
     """
     Extrae la fecha y la hora usando:
     - El nombre de la carpeta (folder_name) => '230123' => 2023-01-23
-    - El nombre del archivo (file_name) => '20230123103000_codigo.csv'
+    - El nombre del archivo (file_name) => '250226061538_005224522800D9540000905725_FAIL'
     
     Luego, intenta formatear fecha/hora a un formato más legible (YYYY-MM-DD y HH:MM:SS).
     Si no puede parsear, usa 'Unknown'.
@@ -27,22 +27,35 @@ def extraer_fecha_y_hora(folder_name, file_name):
     name_without_extension = os.path.splitext(os.path.basename(file_name))[0]
     parts = name_without_extension.split('_')
     if len(parts) >= 1:
-        date_time_part = parts[0]  # p.e. '20230123103000'
+        date_time_part = parts[0]  # Ejemplo: '250226061538'
+        # Si tiene 14 dígitos (YYYYMMDDHHMMSS)
         if len(date_time_part) == 14 and date_time_part.isdigit():
-            date_str = date_time_part[:8]   # '20230123'
-            time_str = date_time_part[8:]   # '103000'
-    
+            date_str = date_time_part[:8]   # 'YYYYMMDD'
+            time_str = date_time_part[8:]   # 'HHMMSS'
+        # Si tiene 12 dígitos (YYMMDDHHMMSS)
+        elif len(date_time_part) == 12 and date_time_part.isdigit():
+            # Convertir a objeto datetime usando el formato de dos dígitos para el año
+            try:
+                dt = datetime.strptime(date_time_part, "%y%m%d%H%M%S")
+                date_str = dt.strftime("%Y%m%d")
+                time_str = dt.strftime("%H%M%S")
+            except Exception as e:
+                # Si ocurre un error, se dejarán como 'Unknown'
+                print(f"Error al parsear fecha y hora: {e}")
+
     # 3) Formatear fecha y hora a un formato legible
     try:
         date_obj = datetime.strptime(date_str, "%Y%m%d")
         date_str = date_obj.strftime("%Y-%m-%d")
-    except:
+    except Exception as e:
         date_str = "Unknown"
+        print(f"Error al formatear la fecha: {e}")
     try:
         time_obj = datetime.strptime(time_str, "%H%M%S")
         time_str = time_obj.strftime("%H:%M:%S")
-    except:
+    except Exception as e:
         time_str = "Unknown"
+        print(f"Error al formatear la hora: {e}")
 
     return date_str, time_str
 

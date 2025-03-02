@@ -1,13 +1,16 @@
-from cx_Freeze import setup, Executable
 import sys
 import os
+from cx_Freeze import setup, Executable
+
+# Aumentar el límite de recursión si es necesario (opcional)
+sys.setrecursionlimit(10000)
 
 # Datos de la versión
-version = "1.8"
+version = "1.5"
 changelog = """
 Cambios en la versión 1.5:
 - Diseño renovado y más detalles en la organización.
-- Seguimiento de log con un click en la función (únicamente funciona en el cuadro de seguimiento).
+- Seguimiento de log con un clic en la función (únicamente funciona en el cuadro de seguimiento).
 - Se agregó el botón de ordenar por fecha (únicamente disponible para el frame debajo del botón de cargar).
 """
 
@@ -16,34 +19,60 @@ with open("Version.txt", "w", encoding="utf-8") as version_file:
     version_file.write(f"Versión: {version}\n")
     version_file.write(changelog)
 
-# Si la aplicación es una GUI en Windows, se recomienda definir una base
-base = None
-if sys.platform == "win32":
-    base = "Win32GUI"  # Esto oculta la consola
+# Definir base para ocultar la consola en Windows
+base = "Win32GUI" if sys.platform == "win32" else None
 
-# Configuración de cx_Freeze
-includes = []
-includefiles = ["Version.txt", "assets/Logo_Mirgor.png", "assets/Logo Clare.png"]  # Incluye archivos adicionales, por ejemplo imágenes
-excludes = ['tkinter']  # En ocasiones se excluye 'tkinter' si no se necesita (pero en apps GUI normalmente se utiliza)
-packages = ['os', 'csv', 'sys', 'datetime', 'tkinter', 'PIL']
+# Archivos a incluir
+include_files = ["Version.txt"]
 
-# Si deseas asignar un icono a tu aplicación, coloca un archivo .ico (por ejemplo, app_icon.ico) en tu proyecto
+# Módulos a incluir
+includes = [
+    "tkinter",
+    "tkinter.filedialog",
+    "tkinter.messagebox",
+    "tkinter.ttk",
+    "tkinter.scrolledtext",
+    "PIL"
+]
+
+# Módulos a excluir (para reducir tamaño)
+excludes = [
+    "unittest",
+    "email",
+    "http",
+    "urllib",
+    "xml",
+    "logging",
+    "asyncio",
+    "sqlite3",  # Si no usas SQLite, puedes excluirlo
+    "multiprocessing"  # Si no usas procesos paralelos, puedes excluirlo
+]
+
+# Paquetes usados en la app
+packages = [
+    "os", "csv", "sys", "datetime",
+    "importlib", "Process"
+]
+
+# Definir el ejecutable
 exe = Executable(
-    "Main.py",            # Archivo principal de tu aplicación
-    base=base,            # Para GUI en Windows
-    targetName="Clare.exe",  # Nombre del ejecutable
-    icon="D:\Herrmienta_trackeo\assets\ICON.png"   # Ruta al archivo de icono (formato .ico)
+    script="Main.py",  # Archivo principal de la app
+    base=base,
+    target_name="Clare.exe"  # Nombre del ejecutable
 )
 
+# Configurar cx_Freeze
 setup(
     name="Clare",
     version=version,
     description="App desarrollada por abregu como herramienta para el puesto de reparación",
-    options={'build_exe': {
-        'includes': includes,
-        'excludes': excludes,
-        'packages': packages,
-        'include_files': includefiles
-    }},
+    options={
+        "build_exe": {
+            "includes": includes,
+            "excludes": excludes,
+            "packages": packages,
+            "include_files": include_files
+        }
+    },
     executables=[exe]
 )
