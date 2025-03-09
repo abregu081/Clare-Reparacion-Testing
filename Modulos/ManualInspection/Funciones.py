@@ -59,20 +59,16 @@ def extraer_fecha_y_hora(folder_name, file_name):
 
     return date_str, time_str
 
-
-
 def buscar_archivo_manualinspection(codigo, directorio):
-    for hostname in os.listdir(directorio):
-        hostname_path = os.path.join(directorio, hostname)
-        if os.path.isdir(hostname_path):
-            fail_path = os.path.join(hostname_path, "FAIL")
-            if os.path.exists(fail_path) and os.path.isdir(fail_path):
-                for subdir in os.listdir(fail_path):
-                    subdir_path = os.path.join(fail_path, subdir)
-                    if os.path.isdir(subdir_path):
-                        for file in os.listdir(subdir_path):
-                            if file.lower().endswith(".csv") and codigo in file:
-                                return os.path.join(subdir_path, file)
+    for root, _, files in os.walk(directorio):
+        if "FAIL" in root:  # Solo busca dentro de carpetas "FAIL"
+            for file in files:
+                if file.lower().endswith(".csv") and codigo in file:
+                    return os.path.join(root, file)
+        elif "PASS" in root:
+            for file in files:
+                if file.lower().endswith(".csv") and codigo in file:
+                    return os.path.join(root, file)
     return None
 
 def procesar_archivo_manualinspection(ruta_archivo):
